@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+
+<script id="vertex-shader" type="x-shader/x-vertex">
+#version 300 es
+in vec4 aPosition;
+
+out vec4 pos;
+
+void
+main()
+{
+    gl_Position = aPosition;
+    pos = aPosition;
+}
+</script>
+
+
+<script id="fragment-shader" type="x-shader/x-fragment">
+    #version 300 es
+
+    #define FLT_MAX 3.402823466e+38
+    #define EPSILON 0.001
+    #define LIGHTCOLOR vec3(1.0,1.0,1.0)
+    precision mediump float;
+    
+    out vec4 fColor;
+    in vec4 pos;
+    
+    uniform vec4 lightPosition;
+    uniform vec4 spherePosition;
+
+    vec3 lightPos;
+
+    void castRay(vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color);
+    void castBounce(vec3 rayOrigin, vec3 rayDirection, inout vec3 color);
+    void raySphere(vec3 sPos, float sRad, vec3 sCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color);
+    void raySphereBounce(vec3 sPos, float sRad, vec3 sCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 color);
+    void rayPlane(vec3 pPos, vec3 pNorm, vec3 pCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color);
+    void rayPlaneBounce(vec3 pPos, vec3 pNorm, vec3 pCol, vec3 rayOrigin, vec3 rayDirection,inout float t, inout vec3 color);
+    vec3 blinnPhong(vec3 cameraPos, vec3 intersect, vec3 norm, vec3 surfaceColor, float shininess);
+    
+    vec3 reflection(vec3 incoming, vec3 normal) {
+        return incoming - 2.0 * dot(incoming,normal) * normal;
+    }
+    
+    void raySphere(vec3 sPos, float sRad, vec3 sCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color)
+    {
+        vec3 oc = rayOrigin - sPos;
+        float a = dot(rayDirection, rayDirection);
+        float b = 2.0 * dot(oc, rayDirection);
+        float c = dot(oc,oc) - sRad*sRad;
+        float discriminant = b*b - 4.0*a*c;
+
+    
+        float dt = 
+            float(discriminant < 0.0) * FLT_MAX +
+            float(discriminant > 0.0) * ((-b - sqrt(discriminant)) / (2.0*a));
+    
+        t = min(t,dt);
+    
+        norm = 
+            float(dt == t) * normalize((rayOrigin + t * rayDirection) - sPos) + 
+            float(dt != t) * norm;
+        
+        //do bounces
+        if(dt == t)
+        {
+            //if hit
+            color = vec3(0.0);
+            castBounce(t*rayDirection + rayOrigin, reflection(rayDirection,norm), color);
+            float fresnel = abs(dot(norm,rayDirection));
+            color = blinnPhong(rayOrigin, t * rayDirection + rayOrigin, norm, (color * (1.0 - fresnel) + sCol * (fresnel)), 40.0);
+        }    
+    }
+
+    void raySphereBounce(vec3 sPos, float sRad, vec3 sCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 color)
+    {
+        vec3 oc = rayOrigin - sPos;
+        float a = dot(rayDirection, rayDirection);
+        float b = 2.0 * dot(oc, rayDirection);
+        float c = dot(oc,oc) - sRad*sRad;
+        float discriminant = b*b - 4.0*a*c;
+
+        float dt = 
+            float(discriminant < 0.0) * FLT_MAX +
+            float(discriminant > 0.0) * ((-b - sqrt(discriminant)) / (2.0*a));
+    
+        dt = 
+            float(dt > EPSILON) * dt + 
+            float(dt < EPSILON) * FLT_MAX;
+        t = min(t,dt);
+
+        color = 
+            float(dt == t && t > EPSILON) * blinnPhong(rayOrigin, t * rayDirection + rayOrigin, normalize((rayOrigin + t * rayDirection) - sPos), sCol, 40.0) +
+            float(!(dt == t && t >EPSILON)) * color;
+    }
+
+    void raySphereLight(vec3 sPos, float sRad, vec3 rayOrigin, vec3 rayDirection, inout float t)
+    {
+        vec3 oc = rayOrigin - sPos;
+        float a = dot(rayDirection, rayDirection);
+        float b = 2.0 * dot(oc, rayDirection);
+        float c = dot(oc,oc) - sRad*sRad;
+        float discriminant = b*b - 4.0*a*c;
+
+        float dt = 
+            float(discriminant < 0.0) * FLT_MAX +
+            float(discriminant > 0.0) * ((-b - sqrt(discriminant)) / (2.0*a));
+    
+        dt = 
+            float(dt > EPSILON) * dt + 
+            float(dt < EPSILON) * FLT_MAX;
+        t = min(t,dt);
+    }
+    
+    void rayPlane(vec3 pPos, vec3 pNorm, vec3 pCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color)
+    {
+        float dt = max(dot((pPos - rayOrigin), pNorm) / dot(rayDirection, pNorm), 0.0);
+        t = min(t,float(dt!=0.0) * dt + float(dt<EPSILON) * FLT_MAX);
+        norm = 
+            float(dt == t) * pNorm + 
+            float(dt != t) * norm;
+
+        vec3 point = t * rayDirection + rayOrigin + vec3(100.01);
+        pCol = float((int(abs(point.x)) % 2 + int(abs(point.y)) % 2 + int(abs(point.z)) % 2) % 2) * pCol;
+
+        color = 
+            float(dt == t) * blinnPhong(rayOrigin, t * rayDirection + rayOrigin, norm, pCol, 40.0) +
+            float(dt != t) * color;
+        //do bounces
+        if(1 == 0)
+        {
+            //if hit
+            color = vec3(0.0);
+            castBounce(t*rayDirection + rayOrigin, reflection(rayDirection,norm), color);
+            float fresnel = abs(dot(norm,rayDirection));
+            color = blinnPhong(rayOrigin, t * rayDirection + rayOrigin, norm, (color * (1.0 - fresnel) + pCol * (fresnel)), 40.0);
+        }  
+    }
+
+    void rayPlaneBounce(vec3 pPos, vec3 pNorm, vec3 pCol, vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 color)
+    {
+        float dt = max(dot((pPos - rayOrigin), pNorm) / dot(rayDirection, pNorm), 0.0);
+        
+        t = min(t,float(dt!=0.0) * dt + float(dt<EPSILON) * FLT_MAX);
+        
+        vec3 point = t * rayDirection + rayOrigin + vec3(100.01);
+        pCol = float((int(abs(point.x)) % 2 + int(abs(point.y)) % 2 + int(abs(point.z)) % 2) % 2) * pCol;
+
+        color = 
+            float(dt == t && t > EPSILON) * pCol +
+            float(dt != t || t < EPSILON) * color;
+        
+    }
+
+    void rayPlaneLight(vec3 pPos, vec3 pNorm, vec3 rayOrigin, vec3 rayDirection, inout float t)
+    {
+        float dt = max(dot((pPos - rayOrigin), pNorm) / dot(rayDirection, pNorm), 0.0);
+        t = min(t,float(dt!=0.0) * dt + float(dt<EPSILON) * FLT_MAX);
+    }
+    
+    void castRay(vec3 rayOrigin, vec3 rayDirection, inout float t, inout vec3 norm, inout vec3 color)
+    {
+        raySphere(vec3(spherePosition.x, spherePosition.y, spherePosition.z), 1.0, vec3(1.0, 0.1, 0.1), rayOrigin, rayDirection, t, norm, color);
+    
+        raySphere(vec3(0.0,-2.0,5.0), 1.0, vec3(0.0, 0.4, 1.0), rayOrigin, rayDirection, t, norm, color);
+    
+        rayPlane(vec3(0.0, -2.5, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.1,0.9,0.1), rayOrigin, rayDirection, t, norm, color);
+        rayPlane(vec3(0.0, 2.5, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.1,0.9,0.1), rayOrigin, rayDirection, t, norm, color);
+        rayPlane(vec3(-2.5, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.9,0.1,0.1), rayOrigin, rayDirection, t, norm, color);
+        rayPlane(vec3(2.5, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.9,0.1,0.1), rayOrigin, rayDirection, t, norm, color);
+        rayPlane(vec3(0.0, 0.0, 10.0), vec3(0.0, 0.0, -1.0), vec3(1.0,1.0,1.0), rayOrigin, rayDirection, t, norm, color);
+    }
+
+    void castBounce(vec3 rayOrigin, vec3 rayDirection, inout vec3 color)
+    {
+        float t = FLT_MAX;
+
+        raySphereBounce(vec3(spherePosition.x, spherePosition.y, spherePosition.z), 1.0, vec3(1.0, 0.1, 0.1), rayOrigin, rayDirection,t, color);
+    
+        raySphereBounce(vec3(0.0,-2.0,5.0), 1.0, vec3(0.0, 0.4, 1.0), rayOrigin, rayDirection,t, color);
+
+        rayPlaneBounce(vec3(0.0, -2.5, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.1,0.9,0.1), rayOrigin, rayDirection, t, color);
+        rayPlaneBounce(vec3(0.0, 2.5, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.1,0.9,0.1), rayOrigin, rayDirection, t, color);
+        rayPlaneBounce(vec3(-2.5, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.9,0.1,0.1), rayOrigin, rayDirection, t, color);
+        rayPlaneBounce(vec3(2.5, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.9,0.1,0.1), rayOrigin, rayDirection, t, color);
+        rayPlaneBounce(vec3(0.0, 0.0, 10.0), vec3(0.0, 0.0, -1.0), vec3(1.0,1.0,1.0), rayOrigin, rayDirection, t, color);
+    }
+
+    void castLight(vec3 rayOrigin, vec3 rayDirection, inout float t)
+    {
+        t = FLT_MAX;
+
+        raySphereLight(vec3(spherePosition.x, spherePosition.y, spherePosition.z), 1.0, rayOrigin, rayDirection,t);
+    
+        raySphereLight(vec3(0.0,-2.0,5.0), 1.0, rayOrigin, rayDirection,t);
+
+        rayPlaneLight(vec3(0.0, -2.5, 0.0), vec3(0.0, 1.0, 0.0), rayOrigin, rayDirection, t);
+        rayPlaneLight(vec3(0.0, 2.5, 0.0), vec3(0.0, -1.0, 0.0), rayOrigin, rayDirection, t);
+        rayPlaneLight(vec3(-2.5, 0.0, 0.0), vec3(1.0, 0.0, 0.0), rayOrigin, rayDirection, t);
+        rayPlaneLight(vec3(2.5, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), rayOrigin, rayDirection, t);
+        rayPlaneLight(vec3(0.0, 0.0, 10.0), vec3(0.0, 0.0, -1.0), rayOrigin, rayDirection, t);
+    }
+
+    vec3 blinnPhong(vec3 cameraPos, vec3 intersect, vec3 norm, vec3 surfaceColor, float shininess){
+        vec3 lightDir   = normalize(lightPos - intersect);
+        vec3 viewDir    = normalize(cameraPos - intersect);
+        vec3 halfwayDir = normalize(lightDir + viewDir);
+    
+        float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
+        vec3 specular = LIGHTCOLOR * spec;
+    
+        float diff = max(dot(norm, lightDir), 0.0);
+        vec3 diffuse = diff * LIGHTCOLOR;
+        // do shadows
+
+        float t;
+        float lightDistance = length(lightPos - intersect);
+        castLight(intersect, lightDir, t); 
+    
+        return float(t > lightDistance) * (specular + surfaceColor * clamp(diff + 0.1, 0.0, 1.0)) + 
+           float(t < lightDistance) * surfaceColor * 0.1;
+    }
+    
+    void main()
+    {
+        //variables
+        vec3 cameraPos = vec3(0.0);
+
+        lightPos = vec3(lightPosition.x,lightPosition.y,lightPosition.z);
+    
+        //take average of 4 samples
+        float step = 0.5 / 500.0;
+        vec3 colFinal = vec3(0.0);
+        {
+            //compute hitting cameraRay
+            float t = FLT_MAX;
+            vec3 norm = vec3(0.0);
+            vec3 col = vec3(0.0);
+            
+
+            vec3 cameraRay = normalize(vec3(pos.x + step,pos.y + step,1.0));
+        
+            castRay(cameraPos, cameraRay, t, norm, col);
+            colFinal = colFinal + col;
+        }
+
+        {
+            //compute hitting cameraRay
+            float t = FLT_MAX;
+            vec3 norm = vec3(0.0);
+            vec3 col = vec3(0.0);
+            
+
+            vec3 cameraRay = normalize(vec3(pos.x - step,pos.y + step,1.0));
+        
+            castRay(cameraPos, cameraRay, t, norm, col);
+            colFinal = colFinal + col;
+        }
+
+        {
+            //compute hitting cameraRay
+            float t = FLT_MAX;
+            vec3 norm = vec3(0.0);
+            vec3 col = vec3(0.0);
+            
+
+            vec3 cameraRay = normalize(vec3(pos.x + step,pos.y - step,1.0));
+        
+            castRay(cameraPos, cameraRay, t, norm, col);
+            colFinal = colFinal + col;
+        }
+
+        {
+            //compute hitting cameraRay
+            float t = FLT_MAX;
+            vec3 norm = vec3(0.0);
+            vec3 col = vec3(0.0);
+            
+
+            vec3 cameraRay = normalize(vec3(pos.x - step,pos.y - step,1.0));
+        
+            castRay(cameraPos, cameraRay, t, norm, col);
+            colFinal = colFinal + col;
+        }
+        
+        
+        //Blinn Phong
+        colFinal = colFinal / 4.0;
+
+        fColor = vec4(colFinal, 1.0 );
+    }
+</script>
+
+<script type="text/javascript" src="Common/webgl-utils.js"></script>
+<script type="text/javascript" src="Common/initShaders.js"></script>
+<script type="text/javascript" src="Common/MV.js"></script>
+<script type="text/javascript" src="index.js"></script>
+
+<div id="sliderX">
+    Light X -10 <input id="sliderXi" type="range"
+    min="-10" max="10" step="1" value="2"
+    />
+    10
+</div><br/>
+
+<div id="sliderY">
+    Light Y -10 <input id="sliderYi" type="range"
+    min="-10" max="10" step="1" value="2"
+    />
+    10
+</div><br/>
+
+<div id="sliderZ">
+    Light Z -10 <input id="sliderZi" type="range"
+    min="-10" max="10" step="1" value="3"
+    />
+    10
+</div><br/>
+
+<div id="animToggleButton">
+    <input id="animToggleButton" type="button" value="Toggle Animation"
+    />
+<body>
+
+<canvas id="gl-canvas" width="512" height="512">>
+Oops ... your browser doesn't support the HTML5 canvas element
+</canvas>
+</body>
+</html>
